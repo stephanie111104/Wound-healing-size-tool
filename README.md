@@ -13,8 +13,9 @@ This repository holds two tools:
 
 ### One-time setup
 
-1. Install **Python 3.10 or newer** from [python.org/downloads](https://www.python.org/downloads/).
-   On Windows, tick **"Add python.exe to PATH"** on the first installer screen.
+1. Install **Python 3.13** (any version from 3.10 to 3.14 works) from [python.org/downloads](https://www.python.org/downloads/).
+   **Python 3.15 is not supported yet**: one of the image-analysis packages (scikit-image) has not released a version for it. You can keep 3.15 installed alongside 3.13; the setup file picks a compatible version automatically.
+   On Windows, tick **"Add python.exe to PATH"** on the first installer screen, or with the Python install manager type `py install 3.13`.
 2. On this GitHub page, choose the `edits-tool` branch, click **Code > Download ZIP**, and unzip it somewhere permanent (for example `Documents/WoundTool`).
 3. In the unzipped folder, double-click **`setup_windows.bat`** (Windows) or **`setup_mac.command`** (Mac) and wait for "Setup complete".
    On a Mac, if it is blocked as coming from an unidentified developer, right-click the file, choose **Open**, then confirm.
