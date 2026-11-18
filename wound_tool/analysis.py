@@ -130,14 +130,61 @@ def debris_painted(a, s=10, thr=7, grow=8):
     return np.where(deb, bg, e)
 
 
-def outline_edges(a0, f=0.8):
-    """Coarse scratch edges from low texture (debris painted out first)."""
-    H, W = a0.shape
+def texture_map(a0):
+    """Local texture (fine detail) with debris painted out: low in the empty scratch, high in the sheet."""
     ec = debris_painted(a0)
     hp = ec - ndi.gaussian_filter(ec, 4)
-    tex = ndi.gaussian_filter(np.abs(hp), (60, 20))
-    m = ndi.binary_fill_holes(tex < threshold_otsu(tex) * f)
-    L = largest(m)
+    return ndi.gaussian_filter(np.abs(hp), (60, 20))
+
+
+def scratch_columns(tex, border=150, smooth=40, gap=120):
+    """Column range of the scratch from the texture averaged down each column.
+
+    Averaging over all rows cancels camera noise, JPEG artefacts and patchy debris, so this is far
+    more stable than thresholding single pixels. Returns (x0, x1, contrast), contrast = 1 - empty/sheet.
+    """
+    H, W = tex.shape
+    p = gaussian_filter1d(np.median(tex, 0), smooth, mode='nearest')
+    inner = p[border:W - border]
+    E = np.percentile(inner, 3)                                  # empty-scratch level
+    C = np.median(inner)                                         # cell-sheet level (sheet is most of the image)
+    T = E + 0.5 * (C - E)
+    low = np.zeros(W, bool)
+    low[border:W - border] = inner < T
+    low = ndi.binary_closing(low, structure=np.ones(gap))       # bridge narrow debris strips inside the scratch
+    low[:border] = low[W - border:] = False
+    lab, n = ndi.label(low)
+    if n == 0:
+        x = int(np.argmin(p)) if inner.size else W // 2
+        return max(0, x - 100), min(W, x + 100), 0.0
+    depth = ndi.sum(np.clip(T - p, 0, None), lab, range(1, n + 1))  # widest and deepest dip wins
+    k = int(np.argmax(depth)) + 1
+    xs = np.where(lab == k)[0]
+    return int(xs[0]), int(xs[-1]), float(1 - E / max(C, 1e-6))
+
+
+def outline_edges(a0, margin=300):
+    """Coarse scratch edges from low texture (debris painted out first).
+
+    The scratch's column range is found first (stable), then a per-pixel mask is thresholded halfway
+    between the scratch's and the sheet's own texture levels and kept only near that column range.
+    """
+    H, W = a0.shape
+    tex = texture_map(a0)
+    x0, x1, _ = scratch_columns(tex)
+    xx = np.arange(W)[None, :]
+    colband = np.broadcast_to((xx >= x0) & (xx <= x1), tex.shape)
+    far = np.broadcast_to((xx < x0 - 250) | (xx > x1 + 250), tex.shape)
+    E = np.median(tex[colband])
+    C = np.median(tex[far]) if far.any() else np.percentile(tex, 75)
+    m = ndi.binary_fill_holes(tex < E + 0.5 * (C - E))
+    m &= np.broadcast_to((xx >= x0 - margin) & (xx <= x1 + margin), tex.shape)
+    lab, n = ndi.label(m)
+    core = np.broadcast_to((xx >= x0 + (x1 - x0) // 4) & (xx <= x1 - (x1 - x0) // 4), tex.shape)
+    ids = np.unique(lab[core & m])
+    L = np.isin(lab, ids[ids > 0])                               # every piece that reaches the scratch core
+    if not L.any():
+        L = np.array(colband)
     rows = np.where(L.any(1))[0]
     y = rows.astype(float)
     le = np.array([np.where(L[v])[0].min() for v in rows], float)
@@ -388,7 +435,39 @@ def outline_0h(a0):
     fl, fr = robust_poly(y, nl), robust_poly(y, nr)                        # no outward bulge past the cut
     nl = gaussian_filter1d(np.maximum(nl, fl - 25), 4)
     nr = gaussian_filter1d(np.minimum(nr, fr + 25), 4)
+    nl, nr = guard_edges(nl, nr, XL, XR)
     return nl, nr, outline_mask(nl, nr, a0.shape)
+
+
+def guard_edges(nl, nr, XL, XR, max_in=0.25, min_frac=0.4):
+    """Stop refined edges from collapsing the outline.
+
+    Each edge may move inward from the traced edge by at most ``max_in`` x the typical traced width,
+    and rows where the outline is narrower than ``min_frac`` x that width fall back to the traced
+    edges. The traced edges come from one continuous path per side and never cross.
+    """
+    w = float(np.median(XR - XL))
+    nl = np.minimum(nl, XL + max_in * w)
+    nr = np.maximum(nr, XR - max_in * w)
+    bad = (nr - nl) < min_frac * w
+    if bad.any():
+        bad = ndi.binary_dilation(bad, iterations=30)                     # blend back in smoothly
+        wgt = gaussian_filter1d(bad.astype(float), 10)
+        nl = wgt * XL + (1 - wgt) * nl
+        nr = wgt * XR + (1 - wgt) * nr
+    return nl, nr
+
+
+def outline_check(nl, nr, W):
+    """QC warnings for a 0 h outline: rows with (near) zero width, or a very uneven width."""
+    w = nr - nl
+    med = float(np.median(w))
+    out = []
+    if (w <= 0).any() or (w < 0.3 * med).any():
+        out.append('0h outline pinched or split (%d rows under 30%% of median width)' % int((w < 0.3 * med).sum()))
+    if med < 0.05 * W:
+        out.append('0h outline very narrow (%.0f px)' % med)
+    return out
 
 
 # ============================================================ later time points

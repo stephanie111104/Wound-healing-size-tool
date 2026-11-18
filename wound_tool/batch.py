@@ -228,8 +228,12 @@ def process_well(well, times, folder, outdir):
     if e0 is not None:
         save_roi(e0[0], e0[1], os.path.join(outdir, 'outlines', '%s_0h_outline.roi' % well))
     A0 = int(band0_o.sum())
+    qc0 = an.outline_check(XL, XR, a0.shape[1])
+    contrast = an.scratch_columns(an.texture_map(a0))[2]
+    if contrast < 0.15:
+        qc0.append('Scratch hard to tell from cell sheet (texture contrast %.0f%%)' % (100 * contrast))
     rows.append(dict(well=well, time=0.0, filename=times[0.0], width=g0.shape[1], height=g0.shape[0],
-                     scratch=A0, method='0h scratch outline (reference, 100% cell-free)', qc=[]))
+                     scratch=A0, method='0h scratch outline (reference, 100% cell-free)', qc=qc0))
     items.append((0.0, times[0.0], preview_rgb(p0), ov0, 'reference outline'))
     prev_open = A0
     for t in t_sorted[1:]:
