@@ -297,8 +297,10 @@ def process_well(well, times, folder, outdir):
         op_o = to_orig(r['open'], gt.shape)
         band_o = to_orig(r['band'], gt.shape)
         At = int(op_o.sum())
-        if r['n_confident'] < 2 or r['spread'] > 6:
-            qc.append('Low alignment confidence (%d of 12 regions matched)' % r['n_confident'])
+        if r['n_confident'] < 2:
+            qc.append('Low alignment confidence (%d of 12 regions matched); check outline placement' % r['n_confident'])
+        elif r['spread'] > 6:
+            qc.append('Alignment regions disagree by up to %.0f px; check outline placement' % r['spread'])
         if At > prev_open + 0.02 * A0:
             qc.append('Closure decreased vs previous time point')
         prev_open = At
