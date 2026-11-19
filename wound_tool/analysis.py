@@ -5,15 +5,19 @@ This module holds the image analysis only. ``batch.py`` handles folders, files a
 Overview of the method
 ----------------------
 1. 0 h image -> scratch outline (``outline_0h``)
-   a. Coarse outline: texture is low in the empty scratch and high in the cell sheet.
+   a. Coarse outline: fine (band-pass) texture is low in the empty scratch and high in the cell sheet.
+      Blurry debris has almost no fine texture, so it is not painted out (painting erased cells under it).
+      The scratch's column range comes from texture averaged down each column (robust to noise).
    b. Cell map from cell *shape*: spindle cells are thin ridges (Sato ridge filter); round,
       blurry debris is excluded, and straight spindle cells hidden inside debris zones are rescued.
    c. Each edge is traced as one continuous path from top to bottom (dynamic programming), with
       large debris films treated as neutral.
    d. Each row's edge is then moved onto the actual cell front, using faint directional cells and
-      shape-validated cells that connect back to the cell sheet.
+      shape-validated cells that connect back to the cell sheet, and cells under large debris films
+      found from fine texture (the ridge and shape maps are blind there).
    e. Safety rules: edges never move further into the sheet than the traced edge, narrow spikes
-      (single debris specks) are removed, and no outward bulge beyond the smooth line of the cut.
+      (single debris specks) are removed, no outward bulge beyond the smooth line of the cut, no
+      inward move beyond 25% of the width, and pinched rows fall back to the traced edges.
 2. Later image -> shift relative to 0 h (``align``), from the fixed debris pattern on the plate.
 3. Later image -> cell-free area inside the aligned 0 h outline (``gap_mask``):
    a pixel counts as a cell only if it is new since 0 h AND looks like an in-focus cell.
@@ -130,11 +134,19 @@ def debris_painted(a, s=10, thr=7, grow=8):
     return np.where(deb, bg, e)
 
 
+def band_texture(a0, s1=1.0, s2=3.0):
+    """|band-pass| at the scale of cell edges: high on cell outlines, near zero on empty plastic and on
+    blurry, out-of-focus debris (too smooth to pass). Cells lying under debris keep their texture."""
+    e = enhance(a0)
+    return np.abs(ndi.gaussian_filter(e, s1) - ndi.gaussian_filter(e, s2))
+
+
 def texture_map(a0):
-    """Local texture (fine detail) with debris painted out: low in the empty scratch, high in the sheet."""
-    ec = debris_painted(a0)
-    hp = ec - ndi.gaussian_filter(ec, 4)
-    return ndi.gaussian_filter(np.abs(hp), (60, 20))
+    """Local texture: low in the empty scratch (also where it holds blurry debris), high in the sheet.
+
+    Earlier versions painted debris over with the background first, which also erased the texture of
+    cells under debris (the dark well-edge artefact) and made them read as scratch."""
+    return ndi.gaussian_filter(band_texture(a0), (60, 20))
 
 
 def scratch_columns(tex, border=150, smooth=40, gap=120):
@@ -342,6 +354,22 @@ def shape_cells(a0, guide):
         & ~film_mask_strict(a0)
 
 
+def cells_under_debris(a0, guide, zone, sigma=6, frac=0.5, min_area=400):
+    """Cells inside debris zones, from fine band-pass texture (blurry debris has almost none).
+
+    The ridge and shape maps are switched off inside debris, so cells lying under a debris film or
+    the well-edge artefact were read as scratch. Threshold: halfway between the scratch's and the
+    sheet's own texture levels in this image."""
+    t = ndi.gaussian_filter(band_texture(a0), sigma)
+    core = ndi.binary_erosion(guide, iterations=60)
+    far = ~ndi.binary_dilation(guide, iterations=250)
+    if not core.any() or not far.any():
+        return np.zeros(a0.shape, bool)
+    E, C = np.median(t[core]), np.median(t[far & ~zone])
+    m = ndi.binary_opening((t > E + frac * (C - E)) & zone, iterations=2)
+    return remove_small_objects(m, max_size=min_area)
+
+
 # ============================================================ 0 h: edge tracing and refinement
 def trace_edge(D, side, lo, hi, win=40, max_step=3, step_pen=0.02):
     """Best continuous top-to-bottom edge path. side=-1 left edge, +1 right edge."""
@@ -424,6 +452,7 @@ def outline_0h(a0):
     guide = outline_mask(GL, GR, a0.shape)
     film = film_mask_strict(a0)
     C1 = (clean_cell_map(a0, guide) | faint_cells(a0, guide)) & ~film     # sheet-connected incl. faint cells
+    C1 |= cells_under_debris(a0, guide, film)                              # cells under large debris films
     l1, r1 = _refine(C1, XL, XR, link=5)
     l2, r2 = _refine(shape_cells(a0, guide), XL, XR, link=14)              # shape-validated cells only
     nl = gaussian_filter1d(np.maximum(l1, l2), 3)                          # tightest to the cells

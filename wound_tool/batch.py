@@ -230,6 +230,10 @@ def process_well(well, times, folder, outdir):
     A0 = int(band0_o.sum())
     qc0 = an.outline_check(XL, XR, a0.shape[1])
     contrast = an.scratch_columns(an.texture_map(a0))[2]
+    edge0 = band0 ^ ndi.binary_erosion(band0, iterations=40)
+    film_edge = float((film & edge0).sum() / max(edge0.sum(), 1))
+    if film_edge >= 0.10:
+        qc0.append('Outline edge runs under debris/artefact for %.0f%% of its length; check the edge there' % (100 * film_edge))
     if contrast < 0.15:
         qc0.append('Scratch hard to tell from cell sheet (texture contrast %.0f%%)' % (100 * contrast))
     rows.append(dict(well=well, time=0.0, filename=times[0.0], width=g0.shape[1], height=g0.shape[0],
