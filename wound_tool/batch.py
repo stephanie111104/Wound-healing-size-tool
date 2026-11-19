@@ -206,6 +206,40 @@ def edges_of(mask):
     return np.interp(yy, yy[ok], xl[ok]), np.interp(yy, yy[ok], xr[ok])
 
 
+# ============================================================ manual corrections
+CORRECTIONS_DIR = 'corrections'
+
+
+def find_correction(folder, well):
+    """A hand-corrected 0 h outline for ``well``: corrections/<well>_0h.roi (or _0h_outline.roi)."""
+    d = os.path.join(folder, CORRECTIONS_DIR)
+    for name in ('%s_0h.roi' % well, '%s_0h_outline.roi' % well):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def load_correction(path, shape_orig, shape_work):
+    """ImageJ ROI (any closed shape, original-image pixels) -> (XL, XR, mask) at working size."""
+    import roifile
+    from skimage.draw import polygon
+    roi = roifile.ImagejRoi.fromfile(path)
+    if isinstance(roi, list):
+        roi = roi[0]
+    pts = np.asarray(roi.coordinates(), float)
+    H, W = shape_orig
+    rr, cc = polygon(pts[:, 1], pts[:, 0], shape=(H, W))
+    m = np.zeros((H, W), bool)
+    m[rr, cc] = True
+    if not m.any():
+        raise ValueError('outline in %s is empty or outside the image' % os.path.basename(path))
+    Hw, Ww = shape_work
+    mw = np.asarray(Image.fromarray(m.astype(np.uint8) * 255).resize((Ww, Hw), Image.NEAREST)) > 127
+    xl, xr = edges_of(mw)
+    return xl, xr, mw
+
+
 # ============================================================ one well
 def process_well(well, times, folder, outdir):
     """Analyse one well. Returns a dict with per-image rows and well-level info."""
@@ -215,7 +249,14 @@ def process_well(well, times, folder, outdir):
     p0 = os.path.join(folder, times[0.0])
     g0 = load_gray(p0)
     a0, s0 = to_work(g0)
-    XL, XR, band0 = an.outline_0h(a0)
+    corr = find_correction(folder, well)
+    if corr:                                              # hand-corrected outline wins
+        XL, XR, band0 = load_correction(corr, g0.shape, a0.shape)
+        method0 = '0h scratch outline: manual correction (%s)' % os.path.basename(corr)
+    else:
+        XL, XR, band0 = an.outline_0h(a0)
+        method0 = '0h scratch outline (reference, 100% cell-free)'
+    rows0 = band0.any(1)                                  # rows the outline covers
     film = an.film_mask_strict(a0)
     film_frac = float((film & band0).sum() / max(band0.sum(), 1))
     deb0 = an.debris_map_0h(a0, band0)
@@ -237,7 +278,7 @@ def process_well(well, times, folder, outdir):
     if contrast < 0.15:
         qc0.append('Scratch hard to tell from cell sheet (texture contrast %.0f%%)' % (100 * contrast))
     rows.append(dict(well=well, time=0.0, filename=times[0.0], width=g0.shape[1], height=g0.shape[0],
-                     scratch=A0, method='0h scratch outline (reference, 100% cell-free)', qc=qc0))
+                     scratch=A0, method=method0, qc=qc0))
     items.append((0.0, times[0.0], preview_rgb(p0), ov0, 'reference outline'))
     prev_open = A0
     for t in t_sorted[1:]:
@@ -249,6 +290,10 @@ def process_well(well, times, folder, outdir):
             gt = np.asarray(Image.fromarray(gt.astype(np.float32), mode='F').resize((g0.shape[1], g0.shape[0]), Image.LANCZOS)).astype(float)
         at, _ = to_work(gt)
         r = an.measure_later(a0, (XL, XR), deb0, at)
+        if not rows0.all():                               # outline doesn't span the image: keep its rows only
+            keep = an.shift_img(np.broadcast_to(rows0[:, None], band0.shape).astype(float), *r['shift'], fill=0) > 0.5
+            r['band'] &= keep
+            r['open'] &= keep
         op_o = to_orig(r['open'], gt.shape)
         band_o = to_orig(r['band'], gt.shape)
         At = int(op_o.sum())
@@ -436,6 +481,9 @@ def run(folder, workers=None, log=print):
         log('  PROBLEM: ' + msg)
     if ignored:
         log('  Ignored (not images): ' + ', '.join(ignored))
+    corrected = [w for w in wells if find_correction(folder, w)]
+    if corrected:
+        log('  Manual 0h outline (corrections folder): ' + ', '.join(corrected))
     if not wells:
         log('\nNo wells to analyse. Check the file names (e.g. A1_0h.tif, A1_24h.tif).')
         return None

@@ -18,7 +18,7 @@ This repository holds two tools:
    On Windows, tick **"Add python.exe to PATH"** on the first installer screen, or with the Python install manager type `py install 3.13`.
 2. On this GitHub page, choose the `edits-tool` branch, click **Code > Download ZIP**, and unzip it somewhere permanent (for example `Documents/WoundTool`).
 3. In the unzipped folder, double-click **`setup_windows.bat`** (Windows) or **`setup_mac.command`** (Mac) and wait for "Setup complete".
-   On a Mac, if it is blocked as coming from an unidentified developer, right-click the file, choose **Open**, then confirm.
+   On a Mac, if it is blocked as coming from an unidentified developer: click **Done**, open **System Settings > Privacy & Security**, scroll to **Security** and click **Open Anyway** next to the file's name, then confirm with your password. (On recent macOS, right-click > Open no longer works.)
 
 ### Each time
 
@@ -33,6 +33,15 @@ This repository holds two tools:
    - `outlines/`: the outlines as ImageJ `.roi` files (open in Fiji to check)
    - `run_log.txt`: alignment details and any warnings
 4. Check only the rows whose `qc_flag` is not `OK`.
+
+### Fixing a wrong 0 h outline by hand
+
+If the 0 h outline (red line) is wrong for a well, correct it and run again; that well then uses your outline:
+
+1. In Fiji, open the well's 0 h image, then open its outline from the results folder: `outlines/<Well>_0h_outline.roi` (drag it onto the image).
+2. Drag the outline's points to where the scratch edge really is (or draw a new outline with the polygon tool). Keep it one closed shape that runs from the top of the image to the bottom.
+3. Save it with **File > Save As > Selection...** into a folder called `corrections` inside the plate folder, named `<Well>_0h.roi` (for example `corrections/C4_0h.roi`).
+4. Run the tool again on the plate. The run log lists the wells that used a manual outline, and the `method` column says `manual correction`. The 6 h / 24 h images are measured inside your outline.
 
 Command line (optional): `python run_wound_analysis.py "path/to/plate folder" [--workers N]`.
 
